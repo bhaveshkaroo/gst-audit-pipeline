@@ -111,6 +111,12 @@ class ITCMatcher:
 
         books = self._prepare(books_valid)
         portal = self._prepare(portal_valid)
+        
+        # Explicitly copy keys to prevent pandas outer-join NaN ambiguity
+        books['invoice_no_books'] = books['invoice_no']
+        books['supplier_gstin_books'] = books['supplier_gstin']
+        portal['invoice_no_portal'] = portal['invoice_no']
+        portal['supplier_gstin_portal'] = portal['supplier_gstin']
 
         # Bug 1 & 8: Outer Merge and Bucket C Blind Spot
         merged = pd.merge(
@@ -120,9 +126,6 @@ class ITCMatcher:
             how='outer', 
             suffixes=('_books', '_portal')
         )
-        
-        # Bug 8: Standardize Display GSTIN
-        merged['display_gstin'] = merged['supplier_gstin']
 
         # Bug 1: Classification checks BEFORE fillna
         is_bucket_c = merged['total_tax_books'].isna()
@@ -144,6 +147,24 @@ class ITCMatcher:
         merged['portal_total_tax'] = merged['total_tax_portal'].fillna(0.0)
         merged['tax_variance'] = delta
         merged['abs_variance'] = delta.abs()
+
+        # Bug Fix: Explicitly map Display Columns for rendering
+        merged['display_invoice_no'] = ""
+        merged['display_gstin'] = ""
+        merged['display_date'] = pd.NaT
+        merged['display_tax'] = 0.0
+
+        # Bucket B (Missing in Portal -> pull from books)
+        merged.loc[is_bucket_b, 'display_invoice_no'] = merged.loc[is_bucket_b, 'invoice_no_books']
+        merged.loc[is_bucket_b, 'display_gstin']      = merged.loc[is_bucket_b, 'supplier_gstin_books']
+        merged.loc[is_bucket_b, 'display_date']       = merged.loc[is_bucket_b, 'invoice_date_books']
+        merged.loc[is_bucket_b, 'display_tax']        = merged.loc[is_bucket_b, 'total_tax_books']
+
+        # Bucket D (Value Mismatches -> pull from books as baseline)
+        merged.loc[is_bucket_d, 'display_invoice_no'] = merged.loc[is_bucket_d, 'invoice_no_books']
+        merged.loc[is_bucket_d, 'display_gstin']      = merged.loc[is_bucket_d, 'supplier_gstin_books']
+        merged.loc[is_bucket_d, 'display_date']       = merged.loc[is_bucket_d, 'invoice_date_books']
+        merged.loc[is_bucket_d, 'display_tax']        = merged.loc[is_bucket_d, 'total_tax_books']
 
         # Bucket E: Timing Differences
         if gstr2a_df is not None:

@@ -348,7 +348,7 @@ else:
                     st.markdown("<p style='color:#8A8A8A; font-size:13px; margin-top:-10px;'>Vendor defaulted on filing GSTR-1. High risk of ITC denial.</p>", unsafe_allow_html=True)
                     
                     b_df = result.missing_in_portal
-                    display_cols_b = [c for c in ['books_invoice_no', 'books_invoice_date', 'books_gstin', 'books_total_tax'] if c in b_df.columns]
+                    display_cols_b = [c for c in ['display_invoice_no', 'display_date', 'display_gstin', 'display_tax'] if c in b_df.columns]
                     
                     if len(b_df) > 0:
                         st.dataframe(b_df[display_cols_b], use_container_width=True, hide_index=True)
@@ -362,7 +362,7 @@ else:
                 st.markdown("<p style='color:#8A8A8A; font-size:13px; margin-top:-10px;'>Invoice matched, but tax values deviate between Books and Portal.</p>", unsafe_allow_html=True)
                 
                 d_df = result.amount_mismatches
-                d_cols = [c for c in ['books_invoice_no', 'portal_invoice_no', 'books_total_tax', 'portal_total_tax', 'tax_variance'] if c in d_df.columns]
+                d_cols = [c for c in ['display_invoice_no', 'display_tax', 'portal_total_tax', 'tax_variance'] if c in d_df.columns]
                 
                 if len(d_df) > 0:
                     st.dataframe(d_df[d_cols], use_container_width=True, hide_index=True)

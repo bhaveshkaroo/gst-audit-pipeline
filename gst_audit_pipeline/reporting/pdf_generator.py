@@ -277,7 +277,7 @@ def generate_pdf_report(
         elements.append(Spacer(1, 0.4 * inch))
 
     # ── Schedule A: Missing in Portal (Bucket B) ──
-    b_cols = ['books_invoice_no', 'books_invoice_date', 'books_gstin', 'books_total_tax']
+    b_cols = ['display_invoice_no', 'display_date', 'display_gstin', 'display_tax']
     b_headers = ['Invoice Number', 'Date', 'Supplier GSTIN', 'Tax at Risk (Rs.)']
     b_widths = [1.8 * inch, 1.0 * inch, 1.7 * inch, 1.5 * inch]
     
@@ -290,7 +290,7 @@ def generate_pdf_report(
     )
     
     # ── Schedule B: Value Mismatches (Bucket D) ──
-    d_cols = ['books_invoice_no', 'books_total_tax', 'portal_total_tax', 'tax_variance']
+    d_cols = ['display_invoice_no', 'display_tax', 'portal_total_tax', 'tax_variance']
     d_headers = ['Matched Invoice', 'Books Tax (Rs.)', 'Portal Tax (Rs.)', 'Variance (Rs.)']
     d_widths = [1.8 * inch, 1.4 * inch, 1.4 * inch, 1.4 * inch]
     
