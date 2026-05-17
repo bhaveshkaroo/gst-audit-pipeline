@@ -81,12 +81,18 @@ class ITCMatcher:
         else:
             out['invoice_date'] = pd.NaT
 
-        # GAP 2 FIX: Enforce validation parity on GSTR-2B portal imports
+        # Standardize supplier_gstin string format for matching
+        out['supplier_gstin'] = out['supplier_gstin'].astype(str).str.strip().str.upper()
+
+        # GAP 2 FIX (#SevFix2High): Enforce validation parity including GSTIN structure on GSTR-2B portal imports
         date_cutoff = pd.Timestamp('2025-03-31')
+        gstin_re = r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$'
+        
         mask = (
             (out['invoice_date'] <= date_cutoff) &
             (out['taxable_value'] > 0) &
-            ~((out['cgst'] > 0) & (out['igst'] > 0))
+            ~((out['cgst'] > 0) & (out['igst'] > 0)) &
+            out['supplier_gstin'].str.match(gstin_re)
         )
         return out[mask].copy()
 
@@ -94,7 +100,7 @@ class ITCMatcher:
         out = df.copy()
         out['total_tax'] = out['cgst'] + out['sgst'] + out['igst']
         out['supplier_gstin'] = out['supplier_gstin'].astype(str).str.strip().str.upper().str.replace(r"[^A-Z0-9]", "", regex=True)
-        # GAP 1 FIX: Keep invoice_no completely untouched to preserve original hyphens and characters
+        # Keep invoice_no completely untouched to preserve original hyphens and characters
         return out
 
     def reconcile(
@@ -105,13 +111,22 @@ class ITCMatcher:
     ) -> ReconciliationResult:
         logger.info("Starting ITC reconciliation")
 
+        # Layer 1: Macro ITC sums computed strictly on raw files before any data quality filtering
+        total_books_itc = (
+            pd.to_numeric(books_raw['cgst'], errors='coerce').fillna(0.0) +
+            pd.to_numeric(books_raw['sgst'], errors='coerce').fillna(0.0) +
+            pd.to_numeric(books_raw['igst'], errors='coerce').fillna(0.0)
+        ).sum()
+
+        total_portal_itc = (
+            pd.to_numeric(portal_raw['cgst'], errors='coerce').fillna(0.0) +
+            pd.to_numeric(portal_raw['sgst'], errors='coerce').fillna(0.0) +
+            pd.to_numeric(portal_raw['igst'], errors='coerce').fillna(0.0)
+        ).sum()
+
         # Layer 2: Validated
         books_valid = self._validate_books(books_raw)
         portal_valid = self._validate_portal(portal_raw)
-        
-        # All aggregations run on _valid frames only
-        total_books_itc = (books_valid['cgst'] + books_valid['sgst'] + books_valid['igst']).sum()
-        total_portal_itc = (portal_valid['cgst'] + portal_valid['sgst'] + portal_valid['igst']).sum()
 
         books = self._prepare(books_valid)
         portal = self._prepare(portal_valid)
@@ -119,6 +134,8 @@ class ITCMatcher:
         # Standardize for matching keys without mutating original invoice_no
         books['join_invoice_no'] = books['invoice_no'].astype(str).str.strip().str.upper()
         portal['join_invoice_no'] = portal['invoice_no'].astype(str).str.strip().str.upper()
+
+
 
         # Bug 1 & 8: Outer Merge and Bucket C Blind Spot
         merged = pd.merge(
@@ -187,6 +204,14 @@ class ITCMatcher:
         merged.loc[is_bucket_a, 'display_gstin']      = merged.loc[is_bucket_a, 'supplier_gstin_books']
         merged.loc[is_bucket_a, 'display_date']       = merged.loc[is_bucket_a, 'invoice_date_books']
         merged.loc[is_bucket_a, 'display_tax']        = merged.loc[is_bucket_a, 'total_tax_books']
+
+        # Standard fallback for the basic keys to prevent NaN values in final output slices
+        merged['invoice_no'] = merged['invoice_no_books']
+        merged['supplier_gstin'] = merged['supplier_gstin_books']
+
+        # BUG 1 (#SevFix1Critical): Pull from portal explicitly for Bucket C fallback
+        merged.loc[is_bucket_c, 'invoice_no'] = merged.loc[is_bucket_c, 'invoice_no_portal']
+        merged.loc[is_bucket_c, 'supplier_gstin'] = merged.loc[is_bucket_c, 'supplier_gstin_portal']
 
         # Bucket E: Timing Differences
         if gstr2a_df is not None:
