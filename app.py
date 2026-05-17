@@ -244,6 +244,7 @@ else:
                 generate_pdf_report(
                     reco_summary=result.summary,
                     df_bucket_b=result.missing_in_portal,
+                    df_bucket_c=result.unclaimed_in_books,
                     df_bucket_d=result.amount_mismatches,
                     output_path=pdf_buffer,
                     gstr9_t6b=st.session_state.t6b,
@@ -367,6 +368,21 @@ else:
                     st.dataframe(d_df[d_cols], use_container_width=True, hide_index=True)
                 else:
                     st.markdown("<div style='padding:20px; background-color:#181818; border:1px solid #2D2D2D; border-radius:8px; color:#8A8A8A; text-align:center;'>No value mismatches detected.</div>", unsafe_allow_html=True)
+                
+                st.markdown("<br/>", unsafe_allow_html=True)
+                
+                # --- 5.5 DATA INSPECTION GRIDS (BUCKET C) ---
+                st.markdown("#### Unclaimed in Books (Bucket C)")
+                st.markdown("<p style='color:#8A8A8A; font-size:13px; margin-top:-10px;'>Vendor filed GSTR-1, but invoice is missing from Books. Tax Optimization Opportunity.</p>", unsafe_allow_html=True)
+                
+                c_df = result.unclaimed_in_books
+                c_cols = [c for c in ['invoice_no', 'invoice_date_portal', 'supplier_gstin', 'portal_total_tax'] if c in c_df.columns]
+                
+                if len(c_df) > 0:
+                    st.dataframe(c_df[c_cols], use_container_width=True, hide_index=True)
+                else:
+                    st.markdown("<div style='padding:20px; background-color:#181818; border:1px solid #2D2D2D; border-radius:8px; color:#8A8A8A; text-align:center;'>No unclaimed entries detected in this category.</div>", unsafe_allow_html=True)
+
             
             with tab2:
                 # --- 5.5 GSTR-9 ANNUAL RETURN MAPPING ---

@@ -77,6 +77,7 @@ def _format_currency(val: float | int) -> str:
 def generate_pdf_report(
     reco_summary: dict,
     df_bucket_b: pd.DataFrame,
+    df_bucket_c: pd.DataFrame,
     df_bucket_d: pd.DataFrame,
     output_path: str,
     gstr9_t6b: dict = None,
@@ -92,6 +93,7 @@ def generate_pdf_report(
     Args:
         reco_summary: Dictionary of total metrics from the ITCMatcher.
         df_bucket_b: DataFrame containing "Missing in Portal" exceptions.
+        df_bucket_c: DataFrame containing "Unclaimed in Books" exceptions.
         df_bucket_d: DataFrame containing "Value Mismatches" exceptions.
         output_path: Absolute or relative path to save the generated PDF.
         company_name: Name of the audited entity.
@@ -298,6 +300,19 @@ def generate_pdf_report(
         columns=d_cols,
         col_headers=d_headers,
         col_widths=d_widths
+    )
+    
+    # ── Schedule C: Unclaimed in Books (Bucket C) ──
+    c_cols = ['invoice_no', 'invoice_date_portal', 'supplier_gstin', 'portal_total_tax']
+    c_headers = ['Invoice Number', 'Date', 'Supplier GSTIN', 'Portal Tax (Rs.)']
+    c_widths = [1.8 * inch, 1.0 * inch, 1.7 * inch, 1.5 * inch]
+    
+    _build_schedule(
+        title="Schedule C: Unclaimed in Books (Bucket C)",
+        df=df_bucket_c,
+        columns=c_cols,
+        col_headers=c_headers,
+        col_widths=c_widths
     )
     
     # ════════════════════════════════════════════════════════════════

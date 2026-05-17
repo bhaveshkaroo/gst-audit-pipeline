@@ -77,6 +77,7 @@ def main():
         generate_pdf_report(
             reco_summary=result.summary,
             df_bucket_b=result.missing_in_portal,
+            df_bucket_c=result.unclaimed_in_books,
             df_bucket_d=result.amount_mismatches,
             output_path=pdf_buffer,
             gstr9_t6b=t6b,
