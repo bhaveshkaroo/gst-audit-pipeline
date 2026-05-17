@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VOGUE Birthday Edition — The Icon Issue</title>
+  <meta name="description" content="A premium Vogue-inspired birthday magazine — celebrating beauty, power, and presence.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,opsz,wght@0,6..96,400;0,6..96,600;0,6..96,700;0,6..96,800;0,6..96,900;1,6..96,400&family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;0,800;0,900;1,400;1,500;1,700&family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300;1,400;1,500;1,600&family=Montserrat:wght@200;300;400;500;600;700;800&family=EB+Garamond:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,500;1,600&family=Great+Vibes&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- LOADER -->
+  <div id="loader" class="loader">
+    <div class="loader-inner">
+      <div class="loader-masthead surprise-text">it's time for birthdayy surprise</div>
+      <div class="loader-progress"><div class="loader-progress-bar"></div></div>
+    </div>
+  </div>
+
+  <!-- MAGAZINE -->
+  <div id="magazine-wrapper" class="magazine-wrapper hidden">
+
+    <button id="nav-prev" class="nav-arrow nav-prev" aria-label="Previous page">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="15 18 9 12 15 6"></polyline></svg>
+    </button>
+    <button id="nav-next" class="nav-arrow nav-next" aria-label="Next page">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="9 6 15 12 9 18"></polyline></svg>
+    </button>
+    <div id="page-counter" class="page-counter"><span id="current-page-num">1</span> / <span id="total-pages-num">7</span></div>
+    <div id="keyboard-hint" class="keyboard-hint hidden">Use ← → arrow keys to flip pages</div>
+    
+    <button id="music-toggle" class="music-toggle" aria-label="Toggle Music">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="icon-play">
+        <polygon points="5 3 19 12 5 21 5 3"></polygon>
+      </svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="icon-pause hidden">
+        <rect x="6" y="4" width="4" height="16"></rect>
+        <rect x="14" y="4" width="4" height="16"></rect>
+      </svg>
+    </button>
+    
+    <audio id="bg-music" src="audio/music.mp3" loop></audio>
+
+    <div id="magazine" class="magazine">
+
+      <!-- ═══════════════════════════════════════════
+           SHEET 1 — front.jpg & page 2.jpg
+           ═══════════════════════════════════════════ -->
+      <div class="page" data-page="0">
+        <div class="page-front">
+          <div class="page-content full-image-page">
+            <img src="front.jpg" alt="Front Cover" class="full-image">
+          </div>
+        </div>
+        <div class="page-back">
+          <div class="page-content full-image-page back-side">
+            <img src="page 2.jpg" alt="Page 2" class="full-image">
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════════════════════════════════════════
+           SHEET 2 — page 3.jpg & page 4.jpg
+           ═══════════════════════════════════════════ -->
+      <div class="page" data-page="1">
+        <div class="page-front">
+          <div class="page-content full-image-page">
+            <img src="page 3.jpeg" alt="Page 3" class="full-image">
+          </div>
+        </div>
+        <div class="page-back">
+          <div class="page-content full-image-page back-side">
+            <img src="page 4.jpg" alt="Page 4" class="full-image">
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════════════════════════════════════════
+           SHEET 3 — page 5.jpg & page 6.jpg
+           ═══════════════════════════════════════════ -->
+      <div class="page" data-page="2">
+        <div class="page-front">
+          <div class="page-content full-image-page">
+            <img src="page 5.jpg" alt="Page 5" class="full-image">
+          </div>
+        </div>
+        <div class="page-back">
+          <div class="page-content full-image-page back-side">
+            <img src="page 6.jpg" alt="Page 6" class="full-image">
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════════════════════════════════════════
+           SHEET 4 — page 7.jpg & page 8.jpg
+           ═══════════════════════════════════════════ -->
+      <div class="page" data-page="3">
+        <div class="page-front">
+          <div class="page-content full-image-page">
+            <img src="page 7.jpeg" alt="Page 7" class="full-image">
+          </div>
+        </div>
+        <div class="page-back">
+          <div class="page-content full-image-page back-side">
+            <img src="page 8.jpg" alt="Page 8" class="full-image">
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════════════════════════════════════════
+           SHEET 5 — page 9.jpg & page 10.jpg
+           ═══════════════════════════════════════════ -->
+      <div class="page" data-page="4">
+        <div class="page-front">
+          <div class="page-content full-image-page">
+            <img src="page 9.jpg" alt="Page 9" class="full-image">
+          </div>
+        </div>
+        <div class="page-back">
+          <div class="page-content full-image-page back-side">
+            <img src="page 10.jpg" alt="Page 10" class="full-image">
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════════════════════════════════════════
+           SHEET 6 — page 11.jpg & Merged Left (Video)
+           ═══════════════════════════════════════════ -->
+      <div class="page" data-page="5">
+        <div class="page-front">
+          <div class="page-content full-image-page">
+            <img src="page 11.jpg" alt="Page 11" class="full-image">
+          </div>
+        </div>
+        <div class="page-back">
+          <div class="page-content full-image-page back-side merged-left no-spine">
+            <video id="video-left" src="merged.mp4" muted loop playsinline class="full-image"></video>
+            <div class="merged-overlay-left">
+              <h2 class="merged-birthday-text">Happy Birthdayy</h2>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════════════════════════════════════════
+           SHEET 7 — Merged Right (Video) & last page.jpg
+           ═══════════════════════════════════════════ -->
+      <div class="page" data-page="6">
+        <div class="page-front no-spine">
+          <div class="page-content full-image-page merged-right">
+            <video id="video-right" src="merged.mp4" muted loop playsinline class="full-image"></video>
+          </div>
+        </div>
+        <div class="page-back">
+          <div class="page-content full-image-page back-side">
+            <img src="last page.jpg" alt="Last Page" class="full-image">
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
