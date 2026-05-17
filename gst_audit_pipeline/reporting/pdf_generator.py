@@ -303,7 +303,7 @@ def generate_pdf_report(
     )
     
     # ── Schedule C: Unclaimed in Books (Bucket C) ──
-    c_cols = ['invoice_no', 'invoice_date_portal', 'supplier_gstin', 'portal_total_tax']
+    c_cols = ['display_invoice_no', 'display_date', 'display_gstin', 'display_tax']
     c_headers = ['Invoice Number', 'Date', 'Supplier GSTIN', 'Portal Tax (Rs.)']
     c_widths = [1.8 * inch, 1.0 * inch, 1.7 * inch, 1.5 * inch]
     

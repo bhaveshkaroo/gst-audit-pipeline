@@ -4,7 +4,7 @@
 High-performance vectorized reconciliation engine using pandas/numpy.
 
 Matches: PurchaseRegisterBooks x GSTR-2B (static) x GSTR-2A (dynamic)
-Key:     Normalized GSTIN + Fuzzy Invoice Number
+Key:     Normalized GSTIN + Case-Insensitive Invoice Number
 Tolerance: +/- Rs.1 on total tax amounts
 """
 
@@ -57,7 +57,6 @@ class ITCMatcher:
         date_cutoff = pd.Timestamp('2025-03-31')
         gstin_re = r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$'
 
-        # Standardize string for reliable regex
         out['supplier_gstin'] = out['supplier_gstin'].astype(str).str.strip().str.upper()
 
         mask = (
@@ -95,8 +94,7 @@ class ITCMatcher:
         out = df.copy()
         out['total_tax'] = out['cgst'] + out['sgst'] + out['igst']
         out['supplier_gstin'] = out['supplier_gstin'].astype(str).str.strip().str.upper().str.replace(r"[^A-Z0-9]", "", regex=True)
-        # GAP 1 FIX: Do not strip hyphens from invoice numbers to maintain original formatting
-        out['invoice_no'] = out['invoice_no'].astype(str).str.strip().str.upper()
+        # GAP 1 FIX: Keep invoice_no completely untouched to preserve original hyphens and characters
         return out
 
     def reconcile(
@@ -117,23 +115,26 @@ class ITCMatcher:
 
         books = self._prepare(books_valid)
         portal = self._prepare(portal_valid)
-        
-        # Explicitly copy keys to prevent pandas outer-join NaN ambiguity
-        books['invoice_no_books'] = books['invoice_no']
-        books['supplier_gstin_books'] = books['supplier_gstin']
-        portal['invoice_no_portal'] = portal['invoice_no']
-        portal['supplier_gstin_portal'] = portal['supplier_gstin']
+
+        # Standardize for matching keys without mutating original invoice_no
+        books['join_invoice_no'] = books['invoice_no'].astype(str).str.strip().str.upper()
+        portal['join_invoice_no'] = portal['invoice_no'].astype(str).str.strip().str.upper()
 
         # Bug 1 & 8: Outer Merge and Bucket C Blind Spot
         merged = pd.merge(
             books, 
             portal, 
-            on=['supplier_gstin', 'invoice_no'], 
+            left_on=['supplier_gstin', 'join_invoice_no'],
+            right_on=['supplier_gstin', 'join_invoice_no'],
             how='outer', 
             suffixes=('_books', '_portal')
         )
         
-        # Bug 8: Standardize Display GSTIN
+        # Recreate books/portal specific GSTIN keys after merge
+        merged['supplier_gstin_books'] = merged['supplier_gstin']
+        merged['supplier_gstin_portal'] = merged['supplier_gstin']
+        
+        # Standardize Display GSTIN
         merged['display_gstin'] = merged['supplier_gstin']
 
         # Bug 1: Classification checks BEFORE fillna
@@ -169,21 +170,34 @@ class ITCMatcher:
         merged.loc[is_bucket_b, 'display_date']       = merged.loc[is_bucket_b, 'invoice_date_books']
         merged.loc[is_bucket_b, 'display_tax']        = merged.loc[is_bucket_b, 'total_tax_books']
 
+        # Bucket C (Unclaimed in Books -> pull from portal)
+        merged.loc[is_bucket_c, 'display_invoice_no'] = merged.loc[is_bucket_c, 'invoice_no_portal']
+        merged.loc[is_bucket_c, 'display_gstin']      = merged.loc[is_bucket_c, 'supplier_gstin_portal']
+        merged.loc[is_bucket_c, 'display_date']       = merged.loc[is_bucket_c, 'invoice_date_portal']
+        merged.loc[is_bucket_c, 'display_tax']        = merged.loc[is_bucket_c, 'total_tax_portal']
+
         # Bucket D (Value Mismatches -> pull from books as baseline)
         merged.loc[is_bucket_d, 'display_invoice_no'] = merged.loc[is_bucket_d, 'invoice_no_books']
         merged.loc[is_bucket_d, 'display_gstin']      = merged.loc[is_bucket_d, 'supplier_gstin_books']
         merged.loc[is_bucket_d, 'display_date']       = merged.loc[is_bucket_d, 'invoice_date_books']
         merged.loc[is_bucket_d, 'display_tax']        = merged.loc[is_bucket_d, 'total_tax_books']
 
+        # Bucket A (Perfect Match -> pull from books)
+        merged.loc[is_bucket_a, 'display_invoice_no'] = merged.loc[is_bucket_a, 'invoice_no_books']
+        merged.loc[is_bucket_a, 'display_gstin']      = merged.loc[is_bucket_a, 'supplier_gstin_books']
+        merged.loc[is_bucket_a, 'display_date']       = merged.loc[is_bucket_a, 'invoice_date_books']
+        merged.loc[is_bucket_a, 'display_tax']        = merged.loc[is_bucket_a, 'total_tax_books']
+
         # Bucket E: Timing Differences
         if gstr2a_df is not None:
             g2a = self._validate_portal(gstr2a_df)
             g2a = self._prepare(g2a)
-            g2a_keys = set(zip(g2a['supplier_gstin'], g2a['invoice_no']))
+            g2a['join_invoice_no'] = g2a['invoice_no'].astype(str).str.strip().str.upper()
+            g2a_keys = set(zip(g2a['supplier_gstin'], g2a['join_invoice_no']))
             
             b_mask = merged['match_bucket'] == MatchBucket.B_MISSING_IN_PORTAL.value
             for idx, row in merged[b_mask].iterrows():
-                if (row['supplier_gstin'], row['invoice_no']) in g2a_keys:
+                if (row['supplier_gstin'], row['join_invoice_no']) in g2a_keys:
                     merged.at[idx, 'match_bucket'] = MatchBucket.E_TIMING_DIFFERENCE.value
 
         merged["remarks"] = merged["match_bucket"].map(

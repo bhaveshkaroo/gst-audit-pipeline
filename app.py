@@ -376,7 +376,7 @@ else:
                 st.markdown("<p style='color:#8A8A8A; font-size:13px; margin-top:-10px;'>Vendor filed GSTR-1, but invoice is missing from Books. Tax Optimization Opportunity.</p>", unsafe_allow_html=True)
                 
                 c_df = result.unclaimed_in_books
-                c_cols = [c for c in ['invoice_no', 'invoice_date_portal', 'supplier_gstin', 'portal_total_tax'] if c in c_df.columns]
+                c_cols = [c for c in ['display_invoice_no', 'display_date', 'display_gstin', 'display_tax'] if c in c_df.columns]
                 
                 if len(c_df) > 0:
                     st.dataframe(c_df[c_cols], use_container_width=True, hide_index=True)
