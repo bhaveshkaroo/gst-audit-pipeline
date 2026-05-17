@@ -40,55 +40,77 @@ class ITCMatcher:
     def __init__(self, tax_tolerance: float = _TAX_TOLERANCE):
         self.tax_tolerance = tax_tolerance
 
-    def _prepare(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _validate_books(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Layer 2: Validate books with strict DQ rules."""
         out = df.copy()
-        
-        for col in ["supplier_gstin", "invoice_no", "cgst", "sgst", "igst"]:
-            if col not in out.columns:
-                out[col] = "" if col in ["supplier_gstin", "invoice_no"] else 0.0
-                
-        for col in ["cgst", "sgst", "igst"]:
+        for col in ["supplier_gstin", "invoice_no"]:
+            if col not in out.columns: out[col] = ""
+        for col in ["cgst", "sgst", "igst", "taxable_value"]:
+            if col not in out.columns: out[col] = 0.0
             out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
             
-        out['total_tax'] = out['cgst'] + out['sgst'] + out['igst']
+        if 'invoice_date' in out.columns:
+            out['invoice_date'] = pd.to_datetime(out['invoice_date'], errors='coerce')
+        else:
+            out['invoice_date'] = pd.NaT
 
+        date_cutoff = pd.Timestamp('2025-03-31')
+        gstin_re = r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$'
+
+        # Standardize string for reliable regex
+        out['supplier_gstin'] = out['supplier_gstin'].astype(str).str.strip().str.upper()
+
+        mask = (
+            (out['invoice_date'] <= date_cutoff) &
+            out['supplier_gstin'].str.match(gstin_re) &
+            (out['taxable_value'] > 0) &
+            ((out['cgst'] + out['sgst'] + out['igst']) <= out['taxable_value'])
+        )
+        return out[mask].copy()
+
+    def _validate_portal(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Layer 2: Validate portal with strict DQ rules."""
+        out = df.copy()
+        for col in ["supplier_gstin", "invoice_no"]:
+            if col not in out.columns: out[col] = ""
+        for col in ["cgst", "sgst", "igst"]:
+            if col not in out.columns: out[col] = 0.0
+            out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
+            
+        if 'invoice_date' in out.columns:
+            out['invoice_date'] = pd.to_datetime(out['invoice_date'], errors='coerce')
+        else:
+            out['invoice_date'] = pd.NaT
+
+        date_cutoff = pd.Timestamp('2025-03-31')
+        mask = (out['invoice_date'] <= date_cutoff)
+        return out[mask].copy()
+
+    def _prepare(self, df: pd.DataFrame) -> pd.DataFrame:
+        out = df.copy()
+        out['total_tax'] = out['cgst'] + out['sgst'] + out['igst']
         out['supplier_gstin'] = out['supplier_gstin'].astype(str).str.strip().str.upper().str.replace(r"[^A-Z0-9]", "", regex=True)
         out['invoice_no'] = out['invoice_no'].astype(str).str.strip().str.upper().str.replace(r"[^A-Z0-9]", "", regex=True)
-        
         return out
 
     def reconcile(
         self,
-        books_df: pd.DataFrame,
-        gstr2b_df: pd.DataFrame,
+        books_raw: pd.DataFrame,
+        portal_raw: pd.DataFrame,
         gstr2a_df: Optional[pd.DataFrame] = None,
     ) -> ReconciliationResult:
         logger.info("Starting ITC reconciliation")
 
-        # Bug 3 & 7: Raw Data Macro Calculation BEFORE ANY FILTERS OR DQ
-        raw_books = books_df.copy()
-        raw_portal = gstr2b_df.copy()
+        # Layer 2: Validated
+        books_valid = self._validate_books(books_raw)
+        portal_valid = self._validate_portal(portal_raw)
         
-        for col in ['cgst', 'sgst', 'igst']:
-            if col not in raw_books.columns: raw_books[col] = 0.0
-            if col not in raw_portal.columns: raw_portal[col] = 0.0
-            raw_books[col] = pd.to_numeric(raw_books[col], errors='coerce').fillna(0.0)
-            raw_portal[col] = pd.to_numeric(raw_portal[col], errors='coerce').fillna(0.0)
-            
-        total_books_itc = (raw_books['cgst'] + raw_books['sgst'] + raw_books['igst']).sum()
-        total_portal_itc = (raw_portal['cgst'] + raw_portal['sgst'] + raw_portal['igst']).sum()
+        # All aggregations run on _valid frames only
+        total_books_itc = (books_valid['cgst'] + books_valid['sgst'] + books_valid['igst']).sum()
+        total_portal_itc = (portal_valid['cgst'] + portal_valid['sgst'] + portal_valid['igst']).sum()
 
-        books = self._prepare(books_df)
-        portal = self._prepare(gstr2b_df)
-        
-        # Bug 6: Future Date Leaks (Strict date guard)
-        cut_off = pd.Timestamp('2025-03-31')
-        if 'invoice_date' in books.columns:
-            b_dates = pd.to_datetime(books['invoice_date'], errors='coerce')
-            books = books[b_dates <= cut_off]
-        if 'invoice_date' in portal.columns:
-            p_dates = pd.to_datetime(portal['invoice_date'], errors='coerce')
-            portal = portal[p_dates <= cut_off]
+        books = self._prepare(books_valid)
+        portal = self._prepare(portal_valid)
 
         # Bug 1 & 8: Outer Merge and Bucket C Blind Spot
         merged = pd.merge(
@@ -125,7 +147,8 @@ class ITCMatcher:
 
         # Bucket E: Timing Differences
         if gstr2a_df is not None:
-            g2a = self._prepare(gstr2a_df)
+            g2a = self._validate_portal(gstr2a_df)
+            g2a = self._prepare(g2a)
             g2a_keys = set(zip(g2a['supplier_gstin'], g2a['invoice_no']))
             
             b_mask = merged['match_bucket'] == MatchBucket.B_MISSING_IN_PORTAL.value
