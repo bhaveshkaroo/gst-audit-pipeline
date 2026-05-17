@@ -42,20 +42,17 @@ _NUMERIC_COLS = {"cgst", "sgst", "igst", "taxable_value", "tax_rate"}
 
 
 # ═══════════════════════════════════════════════════════════════
-#  Vectorized Normalization
+#  Vectorized Normalization (Non-Destructive DQ Filters)
 # ═══════════════════════════════════════════════════════════════
 
 def _norm_gstin(s: pd.Series) -> pd.Series:
-    out = s.astype(str).str.strip().str.upper().str.replace(" ", "", regex=False)
-    mask = out.str.len() == 14
-    out = out.where(~mask, "0" + out)
-    return out
+    """Non-destructive formatting: Strip whitespace and uppercase."""
+    return s.astype(str).str.strip().str.upper().str.replace(r"[^A-Z0-9]", "", regex=True)
 
 
 def _norm_invoice(s: pd.Series) -> pd.Series:
-    return s.astype(str).str.strip().str.upper().str.replace(
-        r"[^A-Z0-9]", "", regex=True
-    )
+    """Non-destructive formatting: Alphanumeric only."""
+    return s.astype(str).str.strip().str.upper().str.replace(r"[^A-Z0-9]", "", regex=True)
 
 
 def _strip_zeros(s: pd.Series) -> pd.Series:
@@ -113,6 +110,10 @@ class ReconciliationResult:
             print(f"  {bucket:30s} : {count:>6d}  | {desc}")
         print(f"  {'':30s}   {'------':>6s}")
         print(f"  {'TOTAL':30s} : {self.summary.get('total_records', 0):>6d}")
+        
+        print(f"\n  Total Books ITC               : Rs. {self.summary.get('total_books_itc', 0):>12,.2f}")
+        print(f"  Total Portal Eligible ITC     : Rs. {self.summary.get('total_portal_itc', 0):>12,.2f}")
+        
         total_var = self.summary.get("total_variance", 0)
         print(f"\n  Total Tax Variance (D bucket) : Rs. {total_var:>12,.2f}")
         print(f"  Defaulting Suppliers          : {len(self.defaulting_suppliers):>6d}")
@@ -130,18 +131,6 @@ class ReconciliationResult:
 # ═══════════════════════════════════════════════════════════════
 
 class ITCMatcher:
-    """
-    High-performance 3-Way ITC Matching Engine.
-
-    Strategy (vectorized — no row-level iteration):
-        1. Normalize GSTINs and invoice numbers for all sources.
-        2. Create composite match keys (GSTIN|normalized_invoice).
-        3. Pass 1: outer merge Books <-> GSTR-2B on primary key.
-        4. Pass 2: re-match unmatched on zero-stripped fallback key.
-        5. Classify every row into exactly one of 5 buckets.
-        6. Cross-check books-only against GSTR-2A for timing diffs.
-    """
-
     def __init__(self, tax_tolerance: float = _TAX_TOLERANCE):
         self.tax_tolerance = tax_tolerance
 
@@ -157,117 +146,68 @@ class ITCMatcher:
             len(gstr2a_df) if gstr2a_df is not None else "N/A",
         )
 
-        # Prepare sources with prefixed columns
         books = self._prepare(books_df, "books")
         portal = self._prepare(gstr2b_df, "portal")
         gstr2a = self._prepare(gstr2a_df, "g2a") if gstr2a_df is not None else None
 
-        # Two-pass merge
         matched, unmatched_b, unmatched_p = self._two_pass_merge(books, portal)
-
-        # Classify
         classified = self._classify(matched, unmatched_b, unmatched_p, gstr2a)
-
+        
         return self._build_result(classified)
-
-    # ── Prepare ─────────────────────────────────────────────────
 
     def _prepare(self, df: pd.DataFrame, prefix: str) -> pd.DataFrame:
         out = _standardize(df, prefix)
 
-        # Match keys (internal, unprefixed)
         out["_gstin"] = _norm_gstin(out["gstin"])
         out["_inv"] = _norm_invoice(out["invoice_no"])
         out["_inv_stripped"] = _strip_zeros(out["_inv"])
         out["_key1"] = out["_gstin"] + "|" + out["_inv"]
         out["_key2"] = out["_gstin"] + "|" + out["_inv_stripped"]
 
-        # Numerics
         for col in _NUMERIC_COLS:
             out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
         out["_tax"] = out["cgst"] + out["sgst"] + out["igst"]
 
-        # Prefix user-visible columns
         rename = {c: f"{prefix}_{c}" for c in out.columns if not c.startswith("_")}
         out = out.rename(columns=rename)
-
-        logger.info("Prepared %s: %d rows.", prefix, len(out))
         return out
-
-    # ── Two-Pass Merge ──────────────────────────────────────────
 
     def _two_pass_merge(
         self, books: pd.DataFrame, portal: pd.DataFrame,
     ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-        """
-        Pass 1: Exact match on _key1 (GSTIN + full normalized invoice).
-        Pass 2: Match remaining on _key2 (GSTIN + zero-stripped invoice).
-
-        Returns: (matched_df, unmatched_books_df, unmatched_portal_df)
-        """
-        # ── Pass 1: exact key ──
-        p1 = books.merge(
-            portal, left_on="_key1", right_on="_key1",
-            how="outer", indicator=True, suffixes=("", "_p"),
+        
+        # Pass 1: True Outer Merge to catch Bucket C and Bucket B
+        p1 = pd.merge(
+            books, portal, on="_key1",
+            how="outer", indicator=True, suffixes=("", "_p")
         )
 
         matched = p1[p1["_merge"] == "both"].drop(columns=["_merge"]).copy()
         left_only = p1[p1["_merge"] == "left_only"].drop(columns=["_merge"]).copy()
         right_only = p1[p1["_merge"] == "right_only"].drop(columns=["_merge"]).copy()
 
-        logger.info(
-            "Pass 1: %d matched, %d books-only, %d portal-only.",
-            len(matched), len(left_only), len(right_only),
+        # Pass 2: Fallback zero-stripped match
+        ub = left_only.copy()
+        up = right_only.copy()
+
+        # Ensure correct join key for the right side (portal)
+        up_join = "_key2_p" if "_key2_p" in up.columns else "_key2"
+            
+        p2 = pd.merge(
+            ub, up, left_on="_key2", right_on=up_join,
+            how="inner", suffixes=("", "_p2")
         )
 
-        if len(left_only) == 0 or len(right_only) == 0:
-            return matched, left_only, right_only
-
-        # ── Pass 2: stripped key ──
-        # Extract clean books-side and portal-side records
-        b_cols = [c for c in left_only.columns
-                  if c.startswith("books_") or c.startswith("_")]
-        p_cols = [c for c in right_only.columns
-                  if c.startswith("portal_") or c.startswith("_")]
-
-        ub = left_only[b_cols].copy()
-        up = right_only[p_cols].copy()
-
-        # The portal _key2 may be suffixed from pass-1 outer merge
-        ub_key2 = ub["_key2"]
-        # For portal side after outer merge, _key2 might be _key2_p
-        if "_key2_p" in up.columns:
-            up_key2 = up["_key2_p"]
-        else:
-            up_key2 = up["_key2"]
-
-        ub["_join2"] = ub_key2
-        up["_join2"] = up_key2
-
-        p2 = ub.merge(up, on="_join2", how="inner", suffixes=("", "_p2"))
-
         if len(p2) > 0:
-            logger.info("Pass 2: %d additional matches via stripped key.", len(p2))
-
-            # Remove matched records from unmatched pools
             matched_b_keys = set(p2["_key1"].dropna())
-            p_key1_col = "_key1_p" if "_key1_p" in p2.columns else "_key1_p2"
-            matched_p_keys = set()
-            if p_key1_col in p2.columns:
-                matched_p_keys = set(p2[p_key1_col].dropna())
+            p_key1_col = "_key1_p2" if "_key1_p2" in p2.columns else "_key1"
+            matched_p_keys = set(p2[p_key1_col].dropna())
 
             left_only = left_only[~left_only["_key1"].isin(matched_b_keys)]
-
-            if "_key1_p" in right_only.columns:
-                right_only = right_only[~right_only["_key1_p"].isin(matched_p_keys)]
-            elif "_key1" in right_only.columns:
-                right_only = right_only[~right_only["_key1"].isin(matched_p_keys)]
-
+            right_only = right_only[~right_only["_key1"].isin(matched_p_keys)]
             matched = pd.concat([matched, p2], ignore_index=True, sort=False)
 
         return matched, left_only, right_only
-
-    # ── Classification ──────────────────────────────────────────
 
     def _classify(
         self,
@@ -276,9 +216,8 @@ class ITCMatcher:
         unmatched_portal: pd.DataFrame,
         gstr2a: Optional[pd.DataFrame],
     ) -> pd.DataFrame:
-        """Assign exactly one bucket to every record."""
 
-        # ── Matched records: A (perfect) vs D (mismatch) ──
+        # Matched records (Bucket A & D)
         if len(matched) > 0:
             b_tax = self._get_tax(matched, "books")
             p_tax = self._get_tax(matched, "portal")
@@ -291,13 +230,9 @@ class ITCMatcher:
             matched.loc[perfect, "match_bucket"] = MatchBucket.A_PERFECT_MATCH.value
             matched.loc[~perfect, "match_bucket"] = MatchBucket.D_AMOUNT_MISMATCH.value
         else:
-            matched["books_total_tax"] = []
-            matched["portal_total_tax"] = []
-            matched["tax_variance"] = []
-            matched["abs_variance"] = []
-            matched["match_bucket"] = []
+            matched = pd.DataFrame(columns=["match_bucket", "books_total_tax", "portal_total_tax"])
 
-        # ── Books-only: B (missing) vs E (timing) ──
+        # Unmatched Books (Bucket B & E)
         if len(unmatched_books) > 0:
             b_tax = self._get_tax(unmatched_books, "books")
             unmatched_books["books_total_tax"] = b_tax
@@ -316,13 +251,9 @@ class ITCMatcher:
             else:
                 unmatched_books["match_bucket"] = MatchBucket.B_MISSING_IN_PORTAL.value
         else:
-            unmatched_books["books_total_tax"] = []
-            unmatched_books["portal_total_tax"] = []
-            unmatched_books["tax_variance"] = []
-            unmatched_books["abs_variance"] = []
-            unmatched_books["match_bucket"] = []
+            unmatched_books = pd.DataFrame(columns=["match_bucket", "books_total_tax", "portal_total_tax"])
 
-        # ── Portal-only: C (unclaimed) ──
+        # Unmatched Portal (Bucket C)
         if len(unmatched_portal) > 0:
             p_tax = self._get_tax(unmatched_portal, "portal")
             unmatched_portal["books_total_tax"] = 0.0
@@ -331,13 +262,8 @@ class ITCMatcher:
             unmatched_portal["abs_variance"] = p_tax.abs()
             unmatched_portal["match_bucket"] = MatchBucket.C_UNCLAIMED_IN_BOOKS.value
         else:
-            unmatched_portal["books_total_tax"] = []
-            unmatched_portal["portal_total_tax"] = []
-            unmatched_portal["tax_variance"] = []
-            unmatched_portal["abs_variance"] = []
-            unmatched_portal["match_bucket"] = []
+            unmatched_portal = pd.DataFrame(columns=["match_bucket", "books_total_tax", "portal_total_tax"])
 
-        # ── Remarks ──
         for df in [matched, unmatched_books, unmatched_portal]:
             if len(df) > 0:
                 df["remarks"] = df["match_bucket"].map(
@@ -348,9 +274,12 @@ class ITCMatcher:
             [matched, unmatched_books, unmatched_portal],
             ignore_index=True, sort=False,
         )
+        
+        # Enforce NaN -> 0.0 for aggregation stability
+        combined["books_total_tax"] = combined["books_total_tax"].fillna(0.0)
+        combined["portal_total_tax"] = combined["portal_total_tax"].fillna(0.0)
+        
         return combined
-
-    # ── Build Result ────────────────────────────────────────────
 
     def _build_result(self, classified: pd.DataFrame) -> ReconciliationResult:
         out_cols = self._output_cols(classified)
@@ -384,6 +313,10 @@ class ITCMatcher:
 
         d_df = buckets[MatchBucket.D_AMOUNT_MISMATCH]
         total_var = d_df["tax_variance"].sum() if len(d_df) > 0 else 0
+        
+        # Attach Total Metrics
+        total_books_itc = consolidated["books_total_tax"].sum()
+        total_portal_itc = consolidated["portal_total_tax"].sum()
 
         return ReconciliationResult(
             consolidated=consolidated,
@@ -398,24 +331,21 @@ class ITCMatcher:
                 "bucket_counts": bucket_counts,
                 "total_variance": round(float(total_var), 2),
                 "itc_at_risk": round(float(at_risk), 2),
+                "total_books_itc": round(float(total_books_itc), 2),
+                "total_portal_itc": round(float(total_portal_itc), 2),
                 "defaulting_supplier_count": len(defaulting),
             },
         )
 
-    # ── Helpers ─────────────────────────────────────────────────
-
     def _get_tax(self, df: pd.DataFrame, prefix: str) -> pd.Series:
-        """Get total tax for a prefix, trying _tax then individual cols."""
-        # Direct _tax column (pre-computed)
         for cand in ["_tax", "_tax_p", "_tax_p2"]:
             if cand in df.columns:
                 is_books = prefix == "books"
                 is_portal = prefix == "portal"
                 if (is_books and cand == "_tax") or \
-                   (is_portal and cand in ("_tax_p", "_tax_p2")):
+                   (is_portal and cand in ("_tax_p", "_tax_p2", "_tax")):
                     return pd.to_numeric(df[cand], errors="coerce").fillna(0.0)
 
-        # Fallback: sum component columns
         total = pd.Series(0.0, index=df.index)
         for suffix in ["cgst", "sgst", "igst"]:
             for col in df.columns:

@@ -18,6 +18,10 @@ class GSTR9TableMapper:
     def __init__(self, consolidated_df: pd.DataFrame):
         self.df = consolidated_df.copy()
         
+        # Enforce numeric types for math accuracy
+        self.df['books_total_tax'] = pd.to_numeric(self.df['books_total_tax'], errors='coerce').fillna(0.0)
+        self.df['portal_total_tax'] = pd.to_numeric(self.df['portal_total_tax'], errors='coerce').fillna(0.0)
+        
     def compile_table_6b(self) -> Dict[str, float]:
         """
         Table 6B: Inward supplies received from registered persons.
@@ -51,6 +55,7 @@ class GSTR9TableMapper:
         table_8b_val = table_6b_val
         
         # 8C: ITC booked in current FY but claimed in subsequent FY (Timing / Deferred Differences)
+        # BUG FIX 3: Strict pandas filter condition for Table 8C
         mask_8c = self.df['match_bucket'] == MatchBucket.E_TIMING_DIFFERENCE.value
         table_8c_val = self.df.loc[mask_8c, 'books_total_tax'].sum()
         

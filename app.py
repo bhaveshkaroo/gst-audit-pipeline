@@ -259,10 +259,10 @@ else:
             
             # Extract Core Metrics
             summary = result.summary
-            total_books = sum(result.consolidated['books_total_tax'].fillna(0))
-            total_portal = sum(result.consolidated['portal_total_tax'].fillna(0))
-            net_variance = summary.get('total_variance', 0)
-            itc_at_risk = summary.get('itc_at_risk', 0)
+            total_books = summary.get('total_books_itc', 0.0)
+            total_portal = summary.get('total_portal_itc', 0.0)
+            net_variance = summary.get('total_variance', 0.0)
+            itc_at_risk = summary.get('itc_at_risk', 0.0)
             
             # --- 3. MINIMALIST KPI CARDS ---
             cols = st.columns(4)
