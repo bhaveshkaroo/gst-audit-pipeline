@@ -235,7 +235,7 @@ else:
                 st.session_state.result = result
                 
                 # Execute GSTR-9 Mapper for PDF and UI
-                gstr9_mapper = GSTR9TableMapper(result.consolidated)
+                gstr9_mapper = GSTR9TableMapper(result.consolidated, result.summary.get('total_books_itc', 0.0), result.summary.get('total_portal_itc', 0.0))
                 st.session_state.t6b = gstr9_mapper.compile_table_6b()
                 st.session_state.t8_metrics, st.session_state.t8_risk = gstr9_mapper.compile_table_8_matrix(st.session_state.t6b["Table_6B_Total_ITC"])
                 

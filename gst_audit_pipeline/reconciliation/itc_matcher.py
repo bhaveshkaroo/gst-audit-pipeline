@@ -24,10 +24,6 @@ logger = logging.getLogger(__name__)
 
 _TAX_TOLERANCE = 1.0
 
-# ═══════════════════════════════════════════════════════════════
-#  Result Container
-# ═══════════════════════════════════════════════════════════════
-
 @dataclass
 class ReconciliationResult:
     """Container for the complete reconciliation output."""
@@ -40,53 +36,22 @@ class ReconciliationResult:
     defaulting_suppliers: List[str] = field(default_factory=list)
     summary: dict = field(default_factory=dict)
 
-    def print_summary(self):
-        sep = "=" * 72
-        print(f"\n{sep}")
-        print("  ITC RECONCILIATION SUMMARY")
-        print(sep)
-        for bucket, count in self.summary.get("bucket_counts", {}).items():
-            desc = BUCKET_DESCRIPTIONS.get(MatchBucket(bucket), "")[:60]
-            print(f"  {bucket:30s} : {count:>6d}  | {desc}")
-        print(f"  {'':30s}   {'------':>6s}")
-        print(f"  {'TOTAL':30s} : {self.summary.get('total_records', 0):>6d}")
-        
-        print(f"\n  Total Books ITC               : Rs. {self.summary.get('total_books_itc', 0):>12,.2f}")
-        print(f"  Total Portal Eligible ITC     : Rs. {self.summary.get('total_portal_itc', 0):>12,.2f}")
-        
-        total_var = self.summary.get("total_variance", 0)
-        print(f"\n  Total Tax Variance (D bucket) : Rs. {total_var:>12,.2f}")
-        print(f"  Defaulting Suppliers          : {len(self.defaulting_suppliers):>6d}")
-        itc_at_risk = self.summary.get("itc_at_risk", 0)
-        print(f"\n  ITC at Risk (B+D+E buckets)   : Rs. {itc_at_risk:>12,.2f}")
-        print(sep)
-
-
-# ═══════════════════════════════════════════════════════════════
-#  Core ITC Matcher
-# ═══════════════════════════════════════════════════════════════
-
 class ITCMatcher:
     def __init__(self, tax_tolerance: float = _TAX_TOLERANCE):
         self.tax_tolerance = tax_tolerance
 
     def _prepare(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Standardize core columns for the outer merge."""
         out = df.copy()
         
-        # Ensure base columns exist
         for col in ["supplier_gstin", "invoice_no", "cgst", "sgst", "igst"]:
             if col not in out.columns:
                 out[col] = "" if col in ["supplier_gstin", "invoice_no"] else 0.0
                 
-        # Numeric parsing
         for col in ["cgst", "sgst", "igst"]:
             out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
             
-        # Total Tax sum BEFORE any filters (Bug 3 prep)
         out['total_tax'] = out['cgst'] + out['sgst'] + out['igst']
 
-        # Non-destructive DQ: Strip spaces & uppercase
         out['supplier_gstin'] = out['supplier_gstin'].astype(str).str.strip().str.upper().str.replace(r"[^A-Z0-9]", "", regex=True)
         out['invoice_no'] = out['invoice_no'].astype(str).str.strip().str.upper().str.replace(r"[^A-Z0-9]", "", regex=True)
         
@@ -100,10 +65,32 @@ class ITCMatcher:
     ) -> ReconciliationResult:
         logger.info("Starting ITC reconciliation")
 
+        # Bug 3 & 7: Raw Data Macro Calculation BEFORE ANY FILTERS OR DQ
+        raw_books = books_df.copy()
+        raw_portal = gstr2b_df.copy()
+        
+        for col in ['cgst', 'sgst', 'igst']:
+            if col not in raw_books.columns: raw_books[col] = 0.0
+            if col not in raw_portal.columns: raw_portal[col] = 0.0
+            raw_books[col] = pd.to_numeric(raw_books[col], errors='coerce').fillna(0.0)
+            raw_portal[col] = pd.to_numeric(raw_portal[col], errors='coerce').fillna(0.0)
+            
+        total_books_itc = (raw_books['cgst'] + raw_books['sgst'] + raw_books['igst']).sum()
+        total_portal_itc = (raw_portal['cgst'] + raw_portal['sgst'] + raw_portal['igst']).sum()
+
         books = self._prepare(books_df)
         portal = self._prepare(gstr2b_df)
         
-        # BUG 1 & 2 FIX: True Outer Merge exposing all 5 buckets directly
+        # Bug 6: Future Date Leaks (Strict date guard)
+        cut_off = pd.Timestamp('2025-03-31')
+        if 'invoice_date' in books.columns:
+            b_dates = pd.to_datetime(books['invoice_date'], errors='coerce')
+            books = books[b_dates <= cut_off]
+        if 'invoice_date' in portal.columns:
+            p_dates = pd.to_datetime(portal['invoice_date'], errors='coerce')
+            portal = portal[p_dates <= cut_off]
+
+        # Bug 1 & 8: Outer Merge and Bucket C Blind Spot
         merged = pd.merge(
             books, 
             portal, 
@@ -112,29 +99,31 @@ class ITCMatcher:
             suffixes=('_books', '_portal')
         )
         
-        # Extract tax totals and identify missing values
+        # Bug 8: Standardize Display GSTIN
+        merged['display_gstin'] = merged['supplier_gstin']
+
+        # Bug 1: Classification checks BEFORE fillna
+        is_bucket_c = merged['total_tax_books'].isna()
+        is_bucket_b = merged['total_tax_portal'].isna()
+        
+        # Bug 2: Bucket D (Delta on actual tax amounts)
+        delta = merged['total_tax_books'].fillna(0.0) - merged['total_tax_portal'].fillna(0.0)
+        is_bucket_d = (delta.abs() > self.tax_tolerance) & ~is_bucket_b & ~is_bucket_c
+        
+        is_bucket_a = (delta.abs() <= self.tax_tolerance) & ~is_bucket_b & ~is_bucket_c
+
+        merged['match_bucket'] = ""
+        merged.loc[is_bucket_c, 'match_bucket'] = MatchBucket.C_UNCLAIMED_IN_BOOKS.value
+        merged.loc[is_bucket_b, 'match_bucket'] = MatchBucket.B_MISSING_IN_PORTAL.value
+        merged.loc[is_bucket_d, 'match_bucket'] = MatchBucket.D_AMOUNT_MISMATCH.value
+        merged.loc[is_bucket_a, 'match_bucket'] = MatchBucket.A_PERFECT_MATCH.value
+
         merged['books_total_tax'] = merged['total_tax_books'].fillna(0.0)
         merged['portal_total_tax'] = merged['total_tax_portal'].fillna(0.0)
-        merged['tax_variance'] = merged['portal_total_tax'] - merged['books_total_tax']
-        
-        is_books_missing = merged['total_tax_books'].isna()
-        is_portal_missing = merged['total_tax_portal'].isna()
-        
-        # Classification Engine
-        merged['match_bucket'] = MatchBucket.D_AMOUNT_MISMATCH.value  # Default fallback
-        
-        # Bucket C: Unclaimed in Books (Books isna)
-        merged.loc[is_books_missing, 'match_bucket'] = MatchBucket.C_UNCLAIMED_IN_BOOKS.value
-        
-        # Bucket B: Missing in Portal (Portal isna)
-        merged.loc[is_portal_missing, 'match_bucket'] = MatchBucket.B_MISSING_IN_PORTAL.value
-        
-        # Bucket A and D: Both present
-        both_present = ~is_books_missing & ~is_portal_missing
-        perfect = both_present & (merged['tax_variance'].abs() <= self.tax_tolerance)
-        merged.loc[perfect, 'match_bucket'] = MatchBucket.A_PERFECT_MATCH.value
-        
-        # Bucket E: Timing Differences (Verify Bucket B against GSTR-2A)
+        merged['tax_variance'] = delta
+        merged['abs_variance'] = delta.abs()
+
+        # Bucket E: Timing Differences
         if gstr2a_df is not None:
             g2a = self._prepare(gstr2a_df)
             g2a_keys = set(zip(g2a['supplier_gstin'], g2a['invoice_no']))
@@ -144,15 +133,13 @@ class ITCMatcher:
                 if (row['supplier_gstin'], row['invoice_no']) in g2a_keys:
                     merged.at[idx, 'match_bucket'] = MatchBucket.E_TIMING_DIFFERENCE.value
 
-        # Descriptive remarks
         merged["remarks"] = merged["match_bucket"].map(
             {b.value: d for b, d in BUCKET_DESCRIPTIONS.items()}
         ).fillna("")
 
-        # ── Build Result ──
-        return self._build_result(merged)
+        return self._build_result(merged, total_books_itc, total_portal_itc)
 
-    def _build_result(self, consolidated: pd.DataFrame) -> ReconciliationResult:
+    def _build_result(self, consolidated: pd.DataFrame, total_books_itc: float, total_portal_itc: float) -> ReconciliationResult:
         buckets = {}
         for b in MatchBucket:
             buckets[b] = consolidated[consolidated["match_bucket"] == b.value].copy()
@@ -160,17 +147,16 @@ class ITCMatcher:
         bucket_counts = {b.value: len(buckets[b]) for b in MatchBucket}
 
         b_df = buckets[MatchBucket.B_MISSING_IN_PORTAL]
-        defaulting = sorted(b_df['supplier_gstin'].dropna().unique().tolist()) if 'supplier_gstin' in b_df.columns else []
+        defaulting = sorted(b_df['display_gstin'].dropna().unique().tolist()) if 'display_gstin' in b_df.columns else []
 
-        at_risk = sum(
-            buckets[b]["books_total_tax"].sum()
-            for b in [MatchBucket.B_MISSING_IN_PORTAL, MatchBucket.D_AMOUNT_MISMATCH, MatchBucket.E_TIMING_DIFFERENCE]
+        # Bug 5: Exposure Total Over-inflation (Timing Diffs excluded)
+        at_risk = (
+            buckets[MatchBucket.B_MISSING_IN_PORTAL]["books_total_tax"].sum() +
+            buckets[MatchBucket.C_UNCLAIMED_IN_BOOKS]["portal_total_tax"].sum() +
+            buckets[MatchBucket.D_AMOUNT_MISMATCH]["abs_variance"].sum()
         )
 
         total_var = buckets[MatchBucket.D_AMOUNT_MISMATCH]["tax_variance"].sum()
-        
-        total_books_itc = consolidated["books_total_tax"].sum()
-        total_portal_itc = consolidated["portal_total_tax"].sum()
 
         return ReconciliationResult(
             consolidated=consolidated,

@@ -65,7 +65,7 @@ def main():
     
     # 3. Phase 5 Execution (GSTR9TableMapper)
     print("[3/4] Executing Phase 5: GSTR-9 Statutory Array Mapping...")
-    mapper = GSTR9TableMapper(result.consolidated)
+    mapper = GSTR9TableMapper(result.consolidated, result.summary.get('total_books_itc', 0.0), result.summary.get('total_portal_itc', 0.0))
     t6b = mapper.compile_table_6b()
     t8_metrics, t8_risk = mapper.compile_table_8_matrix(t6b["Table_6B_Total_ITC"])
     

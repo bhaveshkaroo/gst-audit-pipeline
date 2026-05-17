@@ -10,48 +10,36 @@ from typing import Dict, Any, Tuple
 from gst_audit_pipeline.reconciliation.models import MatchBucket
 
 class GSTR9TableMapper:
-    """
-    Consumes the consolidated dataframe from ITCMatcher (ReconciliationResult.consolidated)
-    and computes the values for GSTR-9 Tables 6B and 8.
-    """
-    
-    def __init__(self, consolidated_df: pd.DataFrame):
+    def __init__(self, consolidated_df: pd.DataFrame, raw_books_itc: float, raw_portal_itc: float):
         self.df = consolidated_df.copy()
+        self.raw_books_itc = raw_books_itc
+        self.raw_portal_itc = raw_portal_itc
         
-        # Enforce numeric types for math accuracy
         self.df['books_total_tax'] = pd.to_numeric(self.df['books_total_tax'], errors='coerce').fillna(0.0)
         self.df['portal_total_tax'] = pd.to_numeric(self.df['portal_total_tax'], errors='coerce').fillna(0.0)
         
     def compile_table_6b(self) -> Dict[str, float]:
         """
         Table 6B: Inward supplies received from registered persons.
-        BUG 3 FIX: Calculate sum on the raw books input (total of all books ledgers) 
-        before any destructive DQ filters are factored in.
+        BUG 3 FIX: Calculate sum on the raw books input.
         """
-        total_6b = self.df['books_total_tax'].sum()
-        
         return {
-            "Table_6B_Total_ITC": round(float(total_6b), 2),
+            "Table_6B_Total_ITC": round(float(self.raw_books_itc), 2),
             "Description": "Inward supplies received from registered persons (Excluding B2CL/Unregistered)"
         }
 
     def compile_table_8_matrix(self, table_6b_val: float) -> Tuple[Dict[str, float], Dict[str, Any]]:
-        """
-        Table 8: Core ITC Reconciliation Matrix.
-        Calculates rows 8A, 8B, 8C, and identifies statutory variance 8D.
-        """
-        # 8A: ITC as per GSTR-2B (Portal Reality Baseline)
-        table_8a_val = self.df['portal_total_tax'].sum()
+        # Table 8A: Portal Reality Baseline (Raw portal ITC)
+        table_8a_val = self.raw_portal_itc
         
-        # 8B: ITC credited to GSTR-3B
+        # Table 8B: ITC credited to GSTR-3B
         table_8b_val = table_6b_val
         
-        # 8C: ITC booked in current FY but claimed in subsequent FY (Timing / Deferred Differences)
+        # Table 8C: Deferred Timing Differences (Only Bucket E)
         mask_8c = self.df['match_bucket'] == MatchBucket.E_TIMING_DIFFERENCE.value
         table_8c_val = self.df.loc[mask_8c, 'books_total_tax'].sum()
         
         # BUG 4 FIX: Statutory Variance = 6B - 8A
-        # A positive number exposes ASMT-10 risk (books exceed portal)
         variance_8d = table_6b_val - table_8a_val
         
         metrics = {
@@ -69,20 +57,16 @@ class GSTR9TableMapper:
         }
         
         if variance_8d > 0.0:
-            bucket_b_exposure = self.df.loc[self.df['match_bucket'] == MatchBucket.B_MISSING_IN_PORTAL.value, 'books_total_tax'].sum()
             risk_profile.update({
                 "status": "CRITICAL RISK EXPOSURE",
                 "exposure_value": round(float(variance_8d), 2),
-                "action_item": (f"ASMT-10 Threat: Books exceed portal logs by Rs. {variance_8d:,.2f}. "
-                                f"Isolate Bucket B defaults (Unfiled Vendor Credit total: Rs. {bucket_b_exposure:,.2f}) "
-                                f"and withhold outstanding vendor payouts immediately.")
+                "action_item": f"ASMT-10 Threat: Books exceed portal logs by Rs. {variance_8d:,.2f}."
             })
         elif variance_8d < 0.0:
             risk_profile.update({
                 "status": "TAX OPTIMIZATION OPPORTUNITY",
                 "exposure_value": round(float(abs(variance_8d)), 2),
-                "action_item": (f"Unclaimed Credit: Portal displays Rs. {abs(variance_8d):,.2f} of unutilized eligible ITC. "
-                                f"Cross-verify with Bucket C and execute catch-up claims in the upcoming GSTR-3B filing open window.")
+                "action_item": f"Unclaimed Credit: Portal displays Rs. {abs(variance_8d):,.2f} of unutilized eligible ITC."
             })
             
         return metrics, risk_profile
