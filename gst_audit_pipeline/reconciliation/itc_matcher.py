@@ -69,11 +69,11 @@ class ITCMatcher:
         return out[mask].copy()
 
     def _validate_portal(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Layer 2: Validate portal with strict DQ rules."""
+        """Layer 2: Validate portal with strict DQ rules matching books filters."""
         out = df.copy()
         for col in ["supplier_gstin", "invoice_no"]:
             if col not in out.columns: out[col] = ""
-        for col in ["cgst", "sgst", "igst"]:
+        for col in ["cgst", "sgst", "igst", "taxable_value"]:
             if col not in out.columns: out[col] = 0.0
             out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
             
@@ -82,15 +82,21 @@ class ITCMatcher:
         else:
             out['invoice_date'] = pd.NaT
 
+        # GAP 2 FIX: Enforce validation parity on GSTR-2B portal imports
         date_cutoff = pd.Timestamp('2025-03-31')
-        mask = (out['invoice_date'] <= date_cutoff)
+        mask = (
+            (out['invoice_date'] <= date_cutoff) &
+            (out['taxable_value'] > 0) &
+            ~((out['cgst'] > 0) & (out['igst'] > 0))
+        )
         return out[mask].copy()
 
     def _prepare(self, df: pd.DataFrame) -> pd.DataFrame:
         out = df.copy()
         out['total_tax'] = out['cgst'] + out['sgst'] + out['igst']
         out['supplier_gstin'] = out['supplier_gstin'].astype(str).str.strip().str.upper().str.replace(r"[^A-Z0-9]", "", regex=True)
-        out['invoice_no'] = out['invoice_no'].astype(str).str.strip().str.upper().str.replace(r"[^A-Z0-9]", "", regex=True)
+        # GAP 1 FIX: Do not strip hyphens from invoice numbers to maintain original formatting
+        out['invoice_no'] = out['invoice_no'].astype(str).str.strip().str.upper()
         return out
 
     def reconcile(
@@ -126,6 +132,9 @@ class ITCMatcher:
             how='outer', 
             suffixes=('_books', '_portal')
         )
+        
+        # Bug 8: Standardize Display GSTIN
+        merged['display_gstin'] = merged['supplier_gstin']
 
         # Bug 1: Classification checks BEFORE fillna
         is_bucket_c = merged['total_tax_books'].isna()
