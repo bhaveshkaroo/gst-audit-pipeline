@@ -156,9 +156,20 @@ st.markdown("<p style='color: #8A8A8A; margin-top: -10px; margin-bottom: 30px;'>
 with st.sidebar:
     st.markdown("<h3 style='margin-bottom: 20px;'>Data Ingestion</h3>", unsafe_allow_html=True)
     
-    books_file = st.file_uploader("Internal Purchase Register", type=["xlsx", "csv", "xls"])
-    gstr2a_file = st.file_uploader("GSTR-2A (Dynamic Uploads)", type=["xlsx", "csv", "xls"])
-    gstr2b_file = st.file_uploader("GSTR-2B (Static Lock-in)", type=["xlsx", "csv", "xls"])
+    books_file = st.file_uploader(
+        label="📥 Drop Purchase Register / Books Ledger Here (.xlsx)",
+        type=["xlsx"]
+    )
+    
+    gstr2b_file = st.file_uploader(
+        label="🏛️ Drop Government GSTR-2B Portal Export Here (.xlsx)",
+        type=["xlsx"]
+    )
+    
+    gstr2a_file = st.file_uploader(
+        label="⏳ Optional: Drop GSTR-2A Ledger Here (For Timing Differences) (.xlsx)",
+        type=["xlsx"]
+    )
     
     st.markdown("<br/>", unsafe_allow_html=True)
     run_engine = st.button("RUN PRE-AUDIT ENGINE")
